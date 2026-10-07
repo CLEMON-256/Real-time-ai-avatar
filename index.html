@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nocturne</title>
+  <link rel="stylesheet" href="/static/site.css" />
+</head>
+<body>
+  <!-- The restaurant website. All of it is built by static/site.js, which knows
+       nothing about avatars: it just exposes one SITE method per tool. -->
+  <div id="site"></div>
+
+  <!-- The avatar -->
+  <div id="widget">
+    <video id="video" autoplay playsinline></video>
+    <div id="bar">
+      <span id="state">
+        <i></i><span id="label">Talk to Ava</span>
+        <span id="mic" title="Lights up when LiveKit is receiving your microphone"></span>
+      </span>
+      <button id="start">Start</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  <script src="/static/site.js"></script>
+
+  <script>
+    // Everything the browser needs for the avatar is in this one block.
+    const { Room, RoomEvent } = LivekitClient;
+    const video = document.getElementById('video');
+    const label = document.getElementById('label');
+    const mic = document.getElementById('mic');
+    const btn = document.getElementById('start');
+    let room = null;
+
+    btn.onclick = async () => {
+      if (room) return leave();   // already in the call, so this click means stop
+      btn.textContent = 'Stop';
+      label.textContent = 'Connecting…';
+
+      try {
+        // 1. Get a token from our server and join the room
+        const { url, token } = await (await fetch('/token')).json();
+        room = new Room();
+
+        // 2. The avatar joins as a participant. Play its audio + video.
+        room.on(RoomEvent.TrackSubscribed, (track) => track.attach(video));
+
+        // 3. Show what the agent is doing: listening, thinking or speaking
+        room.on(RoomEvent.ParticipantAttributesChanged, (changed) => {
+          if (changed['lk.agent.state']) label.textContent = changed['lk.agent.state'];
+        });
+
+        // 4. Every tool call arrives here. SITE has one method per tool.
+        room.on(RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+          if (topic !== 'ui') return;
+          const { action, ...args } = JSON.parse(new TextDecoder().decode(payload));
+          SITE[action]?.(args);
+        });
+
+        // The dot lights up when LiveKit says it can hear you.
+        room.on(RoomEvent.ActiveSpeakersChanged, (speakers) =>
+          mic.classList.toggle('on', speakers.some((s) => s.isLocal)));
+        room.on(RoomEvent.Disconnected, leave);
+
+        await room.connect(url, token);
+        await room.localParticipant.setMicrophoneEnabled(true);
+        label.textContent = 'Waiting for Ava…';
+      } catch (err) {
+        leave();
+        label.textContent = err.message;   // mic denied, bad token, no LiveKit
+      }
+    };
+
+    function leave() {
+      room?.disconnect();
+      room = null;
+      mic.classList.remove('on');
+      btn.textContent = 'Start';
+      label.textContent = 'Talk to Ava';
+    }
+  </script>
+</body>
+</html>
